@@ -1,0 +1,18 @@
+How to build:
+
+git clone ...
+cd dir
+docker build --tag xcache:latest .
+
+How to run:
+
+docker run -dt -v /tmp/data:/data -v /tmp/x509up_u`id -u`:/var/run/x509up \
+  -v /cvmfs/atlas.cern.ch/repo/ATLASLocalRootBase/etc/grid-security-emi/certificates:/etc/grid-security/certificates \
+  --rm --net=host -e "UIDGID=`id -u`:`id -g`" xcache
+
+/tmp/data is the disk space for cache. 
+
+To stop
+
+pkill xrootd
+
