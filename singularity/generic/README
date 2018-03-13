@@ -1,0 +1,20 @@
+How to build:
+
+Assume singularity 2.4.x ...
+
+git clone ...
+cd dir
+singularity build xcache.img Singularity
+
+How to run:
+
+singularity run -B /tmp/data:/data,/tmp/x509up:/var/run/x509up \
+    -B /cvmfs/atlas.cern.ch/repo/ATLASLocalRootBase/etc/grid-security-emi/certificates:/etc/grid-security/certificates \
+    xcache.img
+
+/tmp/data is the disk space for cache. 
+
+To stop
+
+pkill xrootd
+
