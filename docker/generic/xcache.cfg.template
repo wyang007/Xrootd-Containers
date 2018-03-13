@@ -22,7 +22,7 @@ else
     oss.space data /data/xrd/datafiles
 
     all.role server
-    oss.path /atlas/rucio r/w
+#    oss.path /atlas/rucio r/w
     oss.path /root:/      r/w
     oss.path /xroot:/     r/w
     ofs.osslib   /usr/lib64/libXrdPss.so

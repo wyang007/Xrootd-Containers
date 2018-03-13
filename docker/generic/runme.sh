@@ -63,6 +63,7 @@ fi
 
 export LD_PRELOAD=/usr/lib64/libtcmalloc.so
 export TCMALLOC_RELEASE_RATE=10
+export XRD_LOCALMETALINKFILE=1
 
 uidgid_help_exit() {
   echo "please use docker -e UIDGID=N:M to provide uid:gid to run xrootd/cmsd"
