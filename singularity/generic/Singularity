@@ -9,8 +9,6 @@ Include: yum
 
 %labels
 Maintainer Wei.Yang
-Version Xcache-CVMFS-0.1
-Purpose Xcache-for-CVMFS
 
 %setup
   mkdir -p $SINGULARITY_ROOTFS/etc/grid-security/certificates 
