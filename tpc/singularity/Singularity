@@ -1,0 +1,281 @@
+#
+# Author: Wei Yang (SLAC National Accelerator Laboratory / Stanford University, 2018)
+#
+
+Bootstrap: yum
+OSVersion: 7
+MirrorURL: http://mirror.centos.org/centos-%{OSVERSION}/%{OSVERSION}/os/$basearch/
+Include: yum
+
+%labels
+Maintainer Wei.Yang
+Version Xrootd:latest
+Purpose Generic Xroot
+
+%setup
+  mkdir -p $SINGULARITY_ROOTFS/etc/grid-security/certificates 
+  mkdir -p $SINGULARITY_ROOTFS/etc/grid-security/vomsdir
+  mkdir -p $SINGULARITY_ROOTFS/etc/grid-security/xrd
+  touch $SINGULARITY_ROOTFS/etc/grid-security/xrd/xrdcert.pem
+  touch $SINGULARITY_ROOTFS/etc/grid-security/xrd/xrdkey.pem
+  touch $SINGULARITY_ROOTFS/var/run/x509up
+
+# optional: prefill certificates and vomsdir.
+  GRIDSECURITY="/cvmfs/oasis.opensciencegrid.org/mis/osg-wn-client/current/el7-x86_64/etc/grid-security"
+  if [ -d $GRIDSECURITY ]; then
+    cd $GRIDSECURITY
+    tar chf - certificates vomsdir | (cd $SINGULARITY_ROOTFS/etc/grid-security; tar xf -)
+  fi
+
+%post
+  yum install -y curl hostname vi gdb strace telnet iputils iputils
+
+  curl -s -o /etc/yum.repos.d/xrootd-stable-slc7.repo http://www.xrootd.org/binaries/xrootd-stable-slc7.repo
+  curl -s -o /etc/pki/rpm-gpg/RPM-GPG-KEY-wlcg http://linuxsoft.cern.ch/wlcg/RPM-GPG-KEY-wlcg
+  curl -s -o /etc/yum.repos.d/wlcg-centos7.repo http://linuxsoft.cern.ch/wlcg/wlcg-centos7.repo
+
+  yum install -y xrootd-server xrootd-client xrootd xrootd-debuginfo 
+  yum install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
+  yum install -y https://repo.opensciencegrid.org/osg/3.4/osg-3.4-el7-release-latest.rpm
+  yum install -y lcmaps lcmaps-plugins-basic lcmaps-plugins-voms xrootd-lcmaps 
+  yum install -y vomsxrd
+
+  touch /etc/xrootd/xrootd.cfg 
+  cat > /etc/xrootd/xrootd.cfg.template <<EOF
+# "redirector" should be full qualified DNS name (e.g. hostname -f)
+set redirector = XROOTD_RDR
+xrd.port XRD_PORT
+
+all.manager proxy \$(redirector):1213
+all.adminpath /tmp/xrootd/var/spool
+all.pidpath   /tmp/xrootd/var/run
+
+all.export /
+
+pss.origin PSS_ORIGIN
+xrootd.chksum adler32 /etc/xrootd/xrdadler32-tpc.sh
+if \$(redirector)
+    all.role proxy manager
+    cms.dfs lookup distrib redirect immed
+    cms.delay startup 30
+    pss.ckslib adler32 /usr/lib64/libXrdPss.so
+else
+    all.role proxy server
+#    ofs.trace all 
+#    pss.trace all debug
+    ofs.tpc autorm pgm /etc/xrootd/xrdcp-tpc.sh
+
+    xrootd.seclib /usr/lib64/libXrdSec.so
+#    sec.protparm gsi -vomsfun:/usr/lib64/libXrdSecgsiVOMS.so -vomsfunparms:certfmt=raw|vos=atlas,cms|grps=/atlas,/cms|dbg
+    sec.protparm gsi -authzfun:/usr/lib64/libXrdLcmaps.so -authzfunparms:--loglevel,1,--lcmapscfg,/etc/xrootd/lcmaps.db
+    sec.protocol /usr/lib64 gsi -ca:1 -crl:3 -gridmap:/dev/null
+
+    acc.audit deny
+    acc.authdb /etc/xrootd/auth_file
+    acc.authrefresh 60
+    ofs.authorize
+fi
+EOF
+
+  cat > /etc/xrootd/xrdcp-tpc.sh <<EOF
+#!/bin/sh
+# echo xrdcp --server -f \$1 root://\$XRDXROOTD_PROXY/\$2 >> /tmp/xrdcp-tpc.log
+xrdcp --server -f \$1 root://\$XRDXROOTD_PROXY/\$2
+EOF
+  chmod 555 /etc/xrootd/xrdcp-tpc.sh
+
+  cat > /etc/xrootd/xrdadler32-tpc.sh <<EOF
+#!/bin/sh
+# echo xrdadler32 root://\$PSS_ORIGIN/\$1 and awk ... >> /tmp/xrdadler32-tpc.log
+xrdadler32 root://\$PSS_ORIGIN/\$1 | awk '{print \$1}'
+EOF
+  chmod 555 /etc/xrootd/xrdadler32-tpc.sh
+
+###
+# Site may need to adjust setting in "useradd", auth_file and voms-mapfile either by 
+# creating new container images, or via bind mounts.
+###
+  useradd -g xrootd -u 1000001 -M -N -s /bin/false atlasrw
+  useradd -g xrootd -u 1000002 -M -N -s /bin/false atlasro
+  useradd -g xrootd -u 1000003 -M -N -s /bin/false cmsrw
+  useradd -g xrootd -u 1000004 -M -N -s /bin/false cmsro
+
+  cat > /etc/xrootd/auth_file <<EOF
+# To be used with xrootd 4.9 ???
+# = atlprod o atlas r production
+# x atlprod / lrwid
+# o atlas   / l
+
+# users listed below need to exist in /etc/password
+# The various mapping grid-mapfile, voms-mapfile, etc. determine the meaning of these "users".
+u atlasrw / rliwd
+u atlasro / rl
+u cmsrw / rliwd
+u cmsro / rl
+EOF
+
+  touch /etc/grid-security/grid-mapfile
+  cat > /etc/grid-security/voms-mapfile <<EOF
+# map the VOMS attributest to either xxx-rw or xxx-ro
+"/atlas/*Role=production/Capability=*" atlasrw
+"/atlas/*Role=lcgadmin/Capability=*" atlasro
+"/atlas/*Role=software/Capability=*" atlasro
+"/atlas/*" atlasro
+"/cms/*" cmsrw
+EOF
+
+  cat > /etc/xrootd/lcmaps.db <<EOF
+#-----------------------------------------------------------------------------
+#
+# Section 1: Module definitions
+# 
+# These generally should not be modified, except for the GUMS host in
+# gumsclient.
+#
+#-----------------------------------------------------------------------------
+
+gridmapfile = "lcmaps_localaccount.mod"
+              "-gridmap /etc/grid-security/grid-mapfile"
+banfile = "lcmaps_ban_dn.mod"
+          "-banmapfile /etc/grid-security/ban-mapfile"
+banvomsfile = "lcmaps_ban_fqan.mod"
+              "-banmapfile /etc/grid-security/ban-voms-mapfile"
+vomsmapfile = "lcmaps_voms_localaccount.mod"
+              "-gridmap /etc/grid-security/voms-mapfile"
+# Uncomment to consider all VOMS FQANs of a proxy instead of just the first
+#              "-all-fqans"
+defaultmapfile = "lcmaps_voms_localaccount2.mod"
+                 "-gridmap /usr/share/osg/voms-mapfile-default"
+# Uncomment to consider all VOMS FQANs of a proxy instead of just the first
+#                 "-all-fqans"
+
+verifyproxy = "lcmaps_verify_proxy.mod"
+          "--allow-limited-proxy"
+          " -certdir /etc/grid-security/certificates"
+
+verifyproxynokey = "lcmaps_verify_proxy2.mod"
+          "--allow-limited-proxy"
+          "--discard_private_key_absence"
+          " -certdir /etc/grid-security/certificates"
+
+# lcmaps policies require at least two modules, so these are here to
+#   fill in if only one module is needed.  "good | bad" has no effect.
+good        = "lcmaps_dummy_good.mod"
+bad         = "lcmaps_dummy_bad.mod"
+
+#-----------------------------------------------------------------------------
+#
+# Mapping policies
+#
+# Each of these define how lcmaps is used in different scenarios. 
+#
+# For the authorize_only mapping, the default policy is generally good
+# but we have supplied a couple of options in comments.
+#
+# We've left the various glexec policies commented out--you need to
+# choose one of the three policies (because otherwise it causes a
+# package dependency problem). Most sites will use the first policy
+# (verify proxy, gums client, glexectracking). There is no need to
+# uncomment the glexec policies if you are not using glexec.
+#
+#-----------------------------------------------------------------------------
+
+#
+# Mapping policy: authorize_only
+# Purpose: Used for the programs that only want authorization and don't
+# 	want lcmaps to do anything else for them.  This is good for most
+#	applications that use globus as their interface to lcmaps.
+#
+
+## If the default policy isn't what you want, pick another one.  Make
+## sure that only one authorize_only policy is uncommented--the other
+## policies should be commented out. For example, if you want policy #2,
+## put a hash mark before the first "gumsclient" line and remove the hash
+## mark on two lines: just before "gridmapfile" and just before the next
+## "gumsclient". 
+
+authorize_only:
+
+## Policy 1: GUMS (most common, default)
+#gumsclient -> good | bad
+
+## Policy 2: grid-mapfile
+#gridmapfile -> good | bad
+
+## Policy 3: voms-mapfiles with banfiles, proxy verification and grid-mapfile
+verifyproxynokey -> banfile
+banfile -> banvomsfile | bad
+banvomsfile -> gridmapfile | bad
+gridmapfile -> good | vomsmapfile
+vomsmapfile -> good | bad
+#vomsmapfile -> good | defaultmapfile
+#defaultmapfile -> good | bad
+
+# repeat authorize_only: for xrootd tpc
+xrootd_policy:
+verifyproxynokey -> banfile
+banfile -> banvomsfile | bad
+banvomsfile -> gridmapfile | bad
+gridmapfile -> good | vomsmapfile
+vomsmapfile -> good | bad
+EOF
+
+# mkdir for SLAC
+  mkdir /afs /u
+
+%runscript
+# X509_USER_PROXY, X509_CERT_DIR, X509_VOMS_DIR do not have to be defined/provided
+
+# if x509 user proxy is provided in a non-standard location (/tmp/x509up_u$(id -u)), 
+# then the proxy should be bind mounted: -B ${X509_USER_PROXY}:/var/run/x509up
+
+unset X509_USER_PROXY
+[ -s /var/run/x509up ] && export X509_USER_PROXY=/var/run/x509up
+
+# if X509_CERT_DIR is not defined, or is inaccessible in the container, then we use
+# the default location. Same for X509_VOMS_DIR.
+# One can also bind mount:
+#     -B ${X509_CERT_DIR}:/etc/grid-security/certificates
+#     -B ${X509_VOMS_DIR}:/etc/grid-security/vomsdir
+
+[ ! -z "$X509_CERT_DIR" ] && [ ! -d "$X509_CERT_DIR" ] && export X509_CERT_DIR=/etc/grid-security/certificates
+[ ! -z "$X509_VOMS_DIR" ] && [ ! -d "$X509_VOMS_DIR" ] && export X509_VOMS_DIR=/etc/grid-security/vomsdir 
+ 
+mkdir -p /tmp/xrootd/var/log /tmp/xrootd/var/spool /tmp/xrootd/var/run
+
+runcmsd=0
+if [ -z "$XROOTD_RDR" ]; then
+  XROOTD_RDR="www.google.com" # XROOTD_RDR must be defined
+else
+  runcmsd=1
+fi
+
+[ -z "$XRD_PORT" ] && XRD_PORT=1094
+
+if [ -z "$PSS_ORIGIN" ]; then
+   echo "Fatal: Unix environment PSS_ORIGIN=<host:port> must be defined and exported"
+   exit 1
+fi
+
+if [ -s /etc/xrootd/xrootd.cfg ]; then
+  xrootd_cfg=/etc/xrootd/xrootd.cfg
+else
+  xrootd_cfg=/tmp/xrootd.cfg
+  cat > $xrootd_cfg <<EOF
+# Xrootd DTN config file - this file is automatically generated
+# # Modification of this file will be lost.
+# #
+# # To make a persistant change, modify and save to another file and then 
+# # bind mount the new config file to /etc/xrootd/xrootd.cfg
+#
+# # Info about the system:
+#
+EOF
+
+  cat /etc/xrootd/xrootd.cfg.template | sed -e "s/XROOTD_RDR/$XROOTD_RDR/g" | \
+                                        sed -e "s/XRD_PORT/$XRD_PORT/g" | \
+                                        sed -e "s/PSS_ORIGIN/$PSS_ORIGIN/g" >> $xrootd_cfg
+fi
+
+/usr/bin/xrootd -b -c $xrootd_cfg -l /tmp/xrootd/var/log/xrootd.log -k 7
+[ "$runcmsd" -eq 1 ] && /usr/bin/cmsd -b -c $xrootd_cfg -l /tmp/xrootd/var/log/cmsd.log -k 7
