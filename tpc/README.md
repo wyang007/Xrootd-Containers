@@ -1,1 +1,1 @@
-Xrootd Proxy with 3rd Party Copy - function as a DTN
+Xrootd Proxy with 3rd Party Copy - to be used as a DTN
